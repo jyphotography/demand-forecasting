@@ -54,9 +54,13 @@ def load_data(sample_size=None):
     test['date'] = pd.to_datetime(test['date'], format='%d.%m.%Y')
     
     if sample_size:
-        unique_combinations = all_sales[['item_id', 'store_id']].drop_duplicates()
-        sampled_combinations = unique_combinations.sample(n=min(sample_size, len(unique_combinations)))
-        all_sales = all_sales.merge(sampled_combinations, on=['item_id', 'store_id'])
+        # Get first N unique items
+        first_n_items = all_sales['item_id'].unique()[:sample_size]
+        print(f"Selected first {len(first_n_items)} unique items")
+        # Filter sales for these items
+        all_sales = all_sales[all_sales['item_id'].isin(first_n_items)]
+        # Also filter test data
+        test = test[test['item_id'].isin(first_n_items)]
     
     return all_sales, test
 
