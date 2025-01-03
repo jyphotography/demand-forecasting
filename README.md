@@ -43,7 +43,45 @@ After activating the virtual environment, start Jupyter:
 jupyter notebook
 ```
 
+## Data Setup
+
+### Downloading Competition Data
+
+1. Install the Kaggle API package:
+```bash
+pip install kaggle
+```
+
+2. Set up Kaggle credentials:
+   - Go to your Kaggle account settings (https://www.kaggle.com/settings)
+   - Click on "Create New API Token" to download `kaggle.json`
+   - Create the Kaggle config directory:
+     ```bash
+     mkdir -p ~/.kaggle
+     ```
+   - Move the downloaded `kaggle.json` to the config directory:
+     ```bash
+     mv path/to/kaggle.json ~/.kaggle/
+     ```
+   - Set appropriate permissions:
+     ```bash
+     chmod 600 ~/.kaggle/kaggle.json
+     ```
+
+3. Download competition data:
+```bash
+# Create data directory
+mkdir -p data
+
+# Download competition data
+kaggle competitions download -c ml-zoomcamp-2024-competition -p data/
+
+# Unzip the downloaded files
+cd data && unzip ml-zoomcamp-2024-competition.zip && cd ..
+```
+
 ## Project Structure
+- `data/`: Competition dataset
 - `notebooks/`: Jupyter notebooks for EDA and model development
 - `src/`: Source code for the final model
 - `requirements.txt`: Project dependencies
