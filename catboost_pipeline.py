@@ -33,14 +33,59 @@ def load_data(data_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
         logger.error(f"Error loading data: {str(e)}")
         raise
 
-def preprocess_data(sales: pd.DataFrame, stores: pd.DataFrame, catalog: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def compute_monthly_averages(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute monthly averages for each store-item combination.
+    
+    Args:
+        df: DataFrame containing the sales data with date and quantity columns
+        
+    Returns:
+        DataFrame with monthly averages for each store-item combination
+    """
+    # Convert date to period for monthly grouping
+    df['year_month'] = df['date'].dt.to_period('M')
+    
+    # Compute monthly average for each store-item combination
+    monthly_avg = (
+        df.groupby(['store_id', 'item_id', 'year_month'])['quantity']
+        .mean()
+        .reset_index()
+    )
+    
+    # Compute overall monthly average for each store-item combination
+    overall_monthly_avg = (
+        monthly_avg.groupby(['store_id', 'item_id'])['quantity']
+        .mean()
+        .reset_index()
+        .rename(columns={'quantity': 'monthly_avg'})
+    )
+    
+    return overall_monthly_avg
+
+def needs_fallback(df: pd.DataFrame, threshold: int = 30) -> bool:
+    """
+    Determine if a store-item combination needs to use fallback monthly average.
+    
+    Args:
+        df: DataFrame containing the sales data for a specific store-item combination
+        threshold: Minimum number of data points required to avoid fallback
+        
+    Returns:
+        bool: True if fallback should be used, False otherwise
+    """
+    return len(df) < threshold
+
+def preprocess_data(sales: pd.DataFrame, stores: pd.DataFrame, catalog: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Preprocess and merge the data, extract features, and limit to top 100 store-item combinations.
+    Also computes monthly averages for fallback predictions.
     
     Returns:
-        tuple[pd.DataFrame, pd.DataFrame]: (processed_data, top_100_combos)
+        tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]: 
             - processed_data: DataFrame containing the processed data for top 100 combinations
             - top_100_combos: DataFrame containing the selected store-item combinations
+            - monthly_averages: DataFrame containing monthly averages for fallback predictions
     """
     logger.info("Starting data preprocessing...")
     
@@ -78,10 +123,30 @@ def preprocess_data(sales: pd.DataFrame, stores: pd.DataFrame, catalog: pd.DataF
     # Filter data to top 100 combinations
     df = df.merge(top_100_combos, on=['store_id', 'item_id'], how='inner')
     
+    # Compute monthly averages for fallback
+    logger.info("Computing monthly averages for fallback predictions...")
+    monthly_averages = compute_monthly_averages(df)
+    
+    # Mark combinations that need fallback
+    combo_data = []
+    for (store_id, item_id), group in df.groupby(['store_id', 'item_id']):
+        needs_fb = needs_fallback(group)
+        combo_data.append({
+            'store_id': store_id,
+            'item_id': item_id,
+            'use_fallback': needs_fb,
+            'data_points': len(group)
+        })
+    combo_status = pd.DataFrame(combo_data)
+    
+    # Update top_100_combos with fallback status
+    top_100_combos = top_100_combos.merge(combo_status, on=['store_id', 'item_id'], how='left')
+    
     logger.info(f"Preprocessed data shape: {df.shape}")
     logger.info(f"Number of unique store-item combinations: {len(top_100_combos)}")
+    logger.info(f"Combinations using fallback: {top_100_combos['use_fallback'].sum()}")
     
-    return df, top_100_combos
+    return df, top_100_combos, monthly_averages
 
 def main():
     """
@@ -94,13 +159,18 @@ def main():
         # Load data
         sales, stores, catalog = load_data(data_dir)
         
-        # Preprocess data
-        processed_data, top_100_combos = preprocess_data(sales, stores, catalog)
+        # Preprocess data and compute monthly averages
+        processed_data, top_100_combos, monthly_averages = preprocess_data(sales, stores, catalog)
         
-        # Save top 100 combinations for later use with test data
+        # Save preprocessed data for later use
         top_100_combos.to_csv(data_dir / 'top_100_combos.csv', index=False)
-        logger.info("Saved top 100 combinations to file")
+        monthly_averages.to_csv(data_dir / 'monthly_averages.csv', index=False)
+        logger.info("Saved top 100 combinations and monthly averages to files")
         
+        # Log fallback statistics
+        fallback_count = top_100_combos['use_fallback'].sum()
+        total_combos = len(top_100_combos)
+        logger.info(f"Using fallback for {fallback_count}/{total_combos} combinations")
         logger.info("Initial data processing completed successfully")
         
     except Exception as e:
