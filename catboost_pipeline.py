@@ -4,6 +4,7 @@ from catboost import CatBoostRegressor
 from pathlib import Path
 from datetime import datetime
 import logging
+from typing import Dict, Tuple
 
 # Set up logging
 logging.basicConfig(
@@ -148,6 +149,79 @@ def preprocess_data(sales: pd.DataFrame, stores: pd.DataFrame, catalog: pd.DataF
     
     return df, top_100_combos, monthly_averages
 
+def train_model(train_data: pd.DataFrame, cat_features: list) -> CatBoostRegressor:
+    """
+    Train a CatBoost model on the given data without validation.
+    
+    Args:
+        train_data: DataFrame containing training data
+        cat_features: List of categorical feature names
+        
+    Returns:
+        Trained CatBoost model
+    """
+    logger.info("Preparing features for training...")
+    
+    # Prepare features and target
+    feature_cols = [col for col in train_data.columns if col not in ['quantity', 'date', 'year_month']]
+    X = train_data[feature_cols]
+    y = train_data['quantity']
+    
+    # Initialize and train model with specified parameters
+    logger.info("Training CatBoost model...")
+    model = CatBoostRegressor(
+        iterations=1000,
+        depth=6,
+        learning_rate=0.1,
+        l2_leaf_reg=3,
+        cat_features=cat_features,
+        verbose=False
+    )
+    
+    model.fit(X, y)
+    return model
+
+def train_models(processed_data: pd.DataFrame, top_100_combos: pd.DataFrame) -> Dict[tuple[str, str], CatBoostRegressor]:
+    """
+    Train CatBoost models for store-item combinations with sufficient data.
+    
+    Args:
+        processed_data: DataFrame containing the processed training data
+        top_100_combos: DataFrame containing the top 100 store-item combinations with fallback status
+        
+    Returns:
+        Dictionary mapping (store_id, item_id) to trained model
+    """
+    logger.info("Starting model training for combinations with sufficient data...")
+    
+    # Define categorical features
+    cat_features = ['store_id', 'item_id', 'month', 'day_of_week']
+    
+    # Initialize models dictionary
+    models: Dict[tuple[str, str], CatBoostRegressor] = {}
+    
+    # Train models for combinations with sufficient data
+    for _, row in top_100_combos[~top_100_combos['use_fallback']].iterrows():
+        store_id, item_id = row['store_id'], row['item_id']
+        
+        # Get data for this combination
+        combo_data = processed_data[
+            (processed_data['store_id'] == store_id) & 
+            (processed_data['item_id'] == item_id)
+        ].copy()
+        
+        logger.info(f"Training model for store {store_id}, item {item_id}")
+        try:
+            model = train_model(combo_data, cat_features)
+            models[(store_id, item_id)] = model
+            logger.info(f"Successfully trained model for store {store_id}, item {item_id}")
+        except Exception as e:
+            logger.error(f"Failed to train model for store {store_id}, item {item_id}: {str(e)}")
+            continue
+    
+    logger.info(f"Successfully trained {len(models)} models")
+    return models
+
 def main():
     """
     Main execution flow for the CatBoost pipeline.
@@ -171,7 +245,22 @@ def main():
         fallback_count = top_100_combos['use_fallback'].sum()
         total_combos = len(top_100_combos)
         logger.info(f"Using fallback for {fallback_count}/{total_combos} combinations")
-        logger.info("Initial data processing completed successfully")
+        
+        # Train models for combinations with sufficient data
+        models = train_models(processed_data, top_100_combos)
+        
+        # Create models directory
+        models_dir = data_dir / 'models'
+        models_dir.mkdir(exist_ok=True)
+        
+        # Save trained models
+        logger.info("Saving trained models...")
+        for (store_id, item_id), model in models.items():
+            model_path = models_dir / f'model_{store_id}_{item_id}.cbm'
+            model.save_model(model_path)
+        logger.info(f"Saved {len(models)} models to {models_dir}")
+        
+        logger.info("Pipeline execution completed successfully")
         
     except Exception as e:
         logger.error(f"Pipeline execution failed: {str(e)}")
