@@ -11,12 +11,12 @@ def load_data(sample_size=None):
     """Load and prepare data for Prophet"""
     data_dir = Path('~/data/ml-zoomcamp-2024').expanduser()
     
-    # Load datasets with proper index handling
-    sales = pd.read_csv(data_dir / 'sales.csv', sep=';', index_col=0)
-    online = pd.read_csv(data_dir / 'online.csv', sep=';', index_col=0)
-    catalog = pd.read_csv(data_dir / 'catalog.csv', sep=';', index_col=0)
-    stores = pd.read_csv(data_dir / 'stores.csv', sep=';', index_col=0)
-    test = pd.read_csv(data_dir / 'test.csv', sep=';', index_col=0)
+    # Load datasets with appropriate separators
+    sales = pd.read_csv(data_dir / 'sales.csv', index_col=0)  # comma-separated
+    online = pd.read_csv(data_dir / 'online.csv', index_col=0)  # comma-separated
+    catalog = pd.read_csv(data_dir / 'catalog.csv', index_col=0)  # comma-separated
+    stores = pd.read_csv(data_dir / 'stores.csv', index_col=0)  # comma-separated
+    test = pd.read_csv(data_dir / 'test.csv', sep=';')  # semicolon-separated
     
     print(f"Loaded data shapes: sales={sales.shape}, online={online.shape}, catalog={catalog.shape}, stores={stores.shape}")
     
@@ -61,12 +61,25 @@ def load_data(sample_size=None):
     return all_sales, test
 
 def prepare_prophet_data(df, group_cols=['item_id', 'store_id']):
-    """Prepare data for Prophet model"""
+    """Prepare data for Prophet model with proper preprocessing"""
+    # Ensure date is datetime
+    df['date'] = pd.to_datetime(df['date'])
+    
     # Aggregate sales by date and group columns
     prophet_data = df.groupby(['date'] + group_cols)['quantity'].sum().reset_index()
     
+    # Sort by date
+    prophet_data = prophet_data.sort_values('date')
+    
+    # Handle negative or zero values in quantity
+    prophet_data['quantity'] = prophet_data['quantity'].clip(lower=0.01)
+    
     # Rename columns for Prophet
     prophet_data = prophet_data.rename(columns={'date': 'ds', 'quantity': 'y'})
+    
+    # Add additional features that might help improve RMSE
+    prophet_data['month'] = prophet_data['ds'].dt.month
+    prophet_data['day_of_week'] = prophet_data['ds'].dt.dayofweek
     
     return prophet_data
 
