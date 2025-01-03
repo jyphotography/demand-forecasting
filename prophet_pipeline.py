@@ -105,7 +105,7 @@ def make_predictions(model, future_dates):
     forecast = model.predict(future_dates)
     return forecast['yhat']
 
-def main(sample_size=100):  # Increased sample size for better validation
+def main(sample_size=None):  # Use full dataset for final predictions
     print("Loading data...")
     predictions = []
     validation_rmse = []
