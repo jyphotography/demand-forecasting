@@ -49,9 +49,9 @@ def load_data(sample_size=None):
     
     print(f"Final merged sales shape: {all_sales.shape}")
     
-    # Convert date
+    # Convert date with proper format
     all_sales['date'] = pd.to_datetime(all_sales['date'])
-    test['date'] = pd.to_datetime(test['date'])
+    test['date'] = pd.to_datetime(test['date'], format='%d.%m.%Y')
     
     if sample_size:
         unique_combinations = all_sales[['item_id', 'store_id']].drop_duplicates()
@@ -62,8 +62,11 @@ def load_data(sample_size=None):
 
 def prepare_prophet_data(df, group_cols=['item_id', 'store_id']):
     """Prepare data for Prophet model with proper preprocessing"""
+    # Create a copy to avoid SettingWithCopyWarning
+    df = df.copy()
+    
     # Ensure date is datetime
-    df['date'] = pd.to_datetime(df['date'])
+    df.loc[:, 'date'] = pd.to_datetime(df['date'])
     
     # Aggregate sales by date and group columns
     prophet_data = df.groupby(['date'] + group_cols)['quantity'].sum().reset_index()
@@ -72,14 +75,14 @@ def prepare_prophet_data(df, group_cols=['item_id', 'store_id']):
     prophet_data = prophet_data.sort_values('date')
     
     # Handle negative or zero values in quantity
-    prophet_data['quantity'] = prophet_data['quantity'].clip(lower=0.01)
+    prophet_data.loc[:, 'quantity'] = prophet_data['quantity'].clip(lower=0.01)
     
     # Rename columns for Prophet
     prophet_data = prophet_data.rename(columns={'date': 'ds', 'quantity': 'y'})
     
     # Add additional features that might help improve RMSE
-    prophet_data['month'] = prophet_data['ds'].dt.month
-    prophet_data['day_of_week'] = prophet_data['ds'].dt.dayofweek
+    prophet_data.loc[:, 'month'] = prophet_data['ds'].dt.month
+    prophet_data.loc[:, 'day_of_week'] = prophet_data['ds'].dt.dayofweek
     
     return prophet_data
 
@@ -102,7 +105,7 @@ def make_predictions(model, future_dates):
     forecast = model.predict(future_dates)
     return forecast['yhat']
 
-def main(sample_size=10):  # Start with very small sample for testing
+def main(sample_size=100):  # Increased sample size for better validation
     print("Loading data...")
     predictions = []
     validation_rmse = []
