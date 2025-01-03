@@ -80,6 +80,12 @@ kaggle competitions download -c ml-zoomcamp-2024-competition -p data/
 cd data && unzip ml-zoomcamp-2024-competition.zip && cd ..
 ```
 
+### Submission
+```bash
+kaggle competitions submit -c ml-zoomcamp-2024-competition -f submission.csv -m ""
+```
+
+
 ## Project Structure
 - `data/`: Competition dataset
 - `notebooks/`: Jupyter notebooks for EDA and model development
