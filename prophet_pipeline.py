@@ -118,31 +118,35 @@ def main(sample_size=None):  # Use full dataset for final predictions
     
     try:
         all_sales, test = load_data(sample_size=sample_size)
-        print(f"Loaded {len(all_sales[['store_id', 'item_id']].drop_duplicates())} store-item combinations")
+        
+        # Get unique store-item combinations from test set
+        test_combinations = test[['store_id', 'item_id']].drop_duplicates()
+        print(f"Found {len(test_combinations)} store-item combinations in test set")
+        
+        if sample_size:
+            test_combinations = test_combinations.head(sample_size)
+            print(f"Limiting to first {sample_size} combinations")
+        
     except Exception as e:
         print(f"Error loading data: {str(e)}")
         return []
     
     try:
         print("\nPreparing data for Prophet...")
+        total_combinations = len(test_combinations)
+        print(f"\nTraining models for {total_combinations} store-item combinations...")
         
-        # Group by store and item
-        groups = all_sales.groupby(['store_id', 'item_id'])
-        total_groups = len(groups)
-        
-        if sample_size and total_groups > sample_size:
-            print(f"Warning: Found {total_groups} groups but limiting to first {sample_size} as requested")
-            total_groups = sample_size
-        
-        print(f"\nTraining models for {total_groups} store-item combinations...")
-        
-        
-        for i, ((store_id, item_id), group_data) in enumerate(groups, 1):
-            if sample_size and i > sample_size:
-                break
+        for i, (_, row) in enumerate(test_combinations.iterrows(), 1):
+            store_id, item_id = row['store_id'], row['item_id']
+            
+            # Get training data for this combination
+            group_data = all_sales[
+                (all_sales['store_id'] == store_id) & 
+                (all_sales['item_id'] == item_id)
+            ]
                 
             try:
-                print(f"\nProcessing group {i}/{total_groups}: store {store_id}, item {item_id}")
+                print(f"\nProcessing group {i}/{total_combinations}: store {store_id}, item {item_id}")
                 
                 # Calculate monthly averages for fallback
                 monthly_avg = group_data.groupby(group_data['date'].dt.month)['quantity'].mean()
@@ -186,14 +190,16 @@ def main(sample_size=None):  # Use full dataset for final predictions
                         preds = make_predictions(model, future_dates)
                         
                         # Store predictions
+                        test_rows = test[
+                            (test['store_id'] == store_id) & 
+                            (test['item_id'] == item_id)
+                        ]
                         pred_df = pd.DataFrame({
-                            'row_id': test[
-                                (test['store_id'] == store_id) & 
-                                (test['item_id'] == item_id)
-                            ]['row_id'],
+                            'row_id': test_rows['row_id'],
                             'quantity': preds
                         })
                         predictions.append(pred_df)
+                        print(f"Made {len(pred_df)} predictions for store {store_id}, item {item_id}")
                     
             except Exception as e:
                 print(f"Error processing group {i}: {str(e)}")
@@ -216,10 +222,17 @@ if __name__ == '__main__':
             final_predictions = pd.concat(predictions)
             final_predictions = final_predictions.sort_values('row_id')
             
+            # Verify predictions
+            print(f"\nGenerated {len(final_predictions)} predictions")
+            print(f"Number of unique store-item combinations: {len(predictions)}")
+            print(f"Any missing values: {final_predictions['quantity'].isna().any()}")
+            
             # Save predictions
             output_path = Path('~/data/ml-zoomcamp-2024/prophet_submission.csv').expanduser()
             final_predictions.to_csv(output_path, index=False)
             print(f"\nPredictions saved to {output_path}")
+        else:
+            print("\nNo predictions generated!")
         
     except KeyboardInterrupt:
         print("\nProcess interrupted by user")
