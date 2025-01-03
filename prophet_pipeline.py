@@ -112,20 +112,53 @@ def make_predictions(model, future_dates):
     forecast = model.predict(future_dates)
     return forecast['yhat']
 
-def main(sample_size=None):  # Use full dataset for final predictions
+def main(sample_size=100):  # Default to 100 items as requested
     print("Loading data...")
     predictions = []
     
     try:
-        all_sales, test = load_data(sample_size=sample_size)
+        # Load raw test data with correct separator
+        data_dir = Path('~/data/ml-zoomcamp-2024').expanduser()
+        test = pd.read_csv(data_dir / 'test.csv', sep=';')
         
-        # Get unique store-item combinations from test set
-        test_combinations = test[['store_id', 'item_id']].drop_duplicates()
-        print(f"Found {len(test_combinations)} store-item combinations in test set")
+        # Keep IDs as strings, only convert date
+        test['row_id'] = test['row_id'].astype(str)
+        test['store_id'] = test['store_id'].astype(str)
+        test['item_id'] = test['item_id'].astype(str)
+        test['date'] = pd.to_datetime(test['date'], format='%d.%m.%Y')
         
-        if sample_size:
-            test_combinations = test_combinations.head(sample_size)
-            print(f"Limiting to first {sample_size} combinations")
+        print("\nTest data sample:")
+        print(test.head().to_string())
+        print("\nTest data types:")
+        print(test.dtypes)
+        
+        # Get first 100 unique store-item combinations from test set
+        test_combinations = test[['store_id', 'item_id']].drop_duplicates().head(sample_size)
+        print(f"Selected first {len(test_combinations)} store-item combinations from test set")
+        
+        # Filter test data to only include selected combinations
+        test = test.merge(test_combinations, on=['store_id', 'item_id'])
+        
+        # Now load and filter training data
+        sales = pd.read_csv(data_dir / 'sales.csv', index_col=0)
+        online = pd.read_csv(data_dir / 'online.csv', index_col=0)
+        
+        # Convert IDs to strings in training data to match test data
+        sales['store_id'] = sales['store_id'].astype(str)
+        sales['item_id'] = sales['item_id'].astype(str)
+        online['store_id'] = online['store_id'].astype(str)
+        online['item_id'] = online['item_id'].astype(str)
+        
+        # Combine sales data
+        sales['channel'] = 'offline'
+        online['channel'] = 'online'
+        all_sales = pd.concat([sales, online], ignore_index=True)
+        
+        # Convert dates in training data
+        all_sales['date'] = pd.to_datetime(all_sales['date'])
+        
+        # Filter training data to match test combinations
+        all_sales = all_sales.merge(test_combinations, on=['store_id', 'item_id'])
         
     except Exception as e:
         print(f"Error loading data: {str(e)}")
@@ -138,6 +171,7 @@ def main(sample_size=None):  # Use full dataset for final predictions
         
         for i, (_, row) in enumerate(test_combinations.iterrows(), 1):
             store_id, item_id = row['store_id'], row['item_id']
+            print(f"\nProcessing combination {i}/{total_combinations}: store {store_id}, item {item_id}")
             
             # Get training data for this combination
             group_data = all_sales[
@@ -146,63 +180,62 @@ def main(sample_size=None):  # Use full dataset for final predictions
             ]
                 
             try:
-                print(f"\nProcessing group {i}/{total_combinations}: store {store_id}, item {item_id}")
+                print(f"\nProcessing combination {i}/{total_combinations}: store {store_id}, item {item_id}")
                 
-                # Calculate monthly averages for fallback
+                # Get test dates for this store-item combination
+                test_group = test[
+                    (test['store_id'] == store_id) & 
+                    (test['item_id'] == item_id)
+                ]
+                
+                if test_group.empty:
+                    print(f"No test data found for store {store_id}, item {item_id}")
+                    continue
+                
+                # Calculate monthly averages
                 monthly_avg = group_data.groupby(group_data['date'].dt.month)['quantity'].mean()
                 
                 if len(group_data) < 30:  # Use monthly average for insufficient data
-                    print(f"Using monthly average for group {i}: insufficient data for Prophet")
+                    print(f"Using monthly average for combination {i}: insufficient data ({len(group_data)} records)")
                     
-                    # Get test dates for this store-item combination
-                    test_group = test[
-                        (test['store_id'] == store_id) & 
-                        (test['item_id'] == item_id)
-                    ]
+                    # Use monthly average for predictions
+                    test_months = test_group['date'].dt.month
+                    preds = test_months.map(monthly_avg.to_dict()).fillna(monthly_avg.mean())
                     
-                    if not test_group.empty:
-                        # Use monthly average for predictions
-                        test_months = test_group['date'].dt.month
-                        preds = test_months.map(monthly_avg.to_dict()).fillna(monthly_avg.mean())
-                        
-                        # Store predictions
-                        pred_df = pd.DataFrame({
-                            'row_id': test_group['row_id'],
-                            'quantity': preds
-                        })
-                        predictions.append(pred_df)
                 else:
-                    # Use Prophet for sufficient data
-                    # Prepare data for this group
+                    print(f"Using Prophet for combination {i}: {len(group_data)} records available")
+                    # Prepare data for Prophet
                     prophet_data = prepare_prophet_data(group_data)
                     
                     # Train model
                     model = train_prophet_model(prophet_data)
                     
-                    # Prepare future dates for this store-item combination
-                    future_dates = test[
-                        (test['store_id'] == store_id) & 
-                        (test['item_id'] == item_id)
-                    ][['date']].rename(columns={'date': 'ds'})
+                    # Prepare future dates
+                    future_dates = test_group[['date']].rename(columns={'date': 'ds'})
                     
                     # Make predictions
-                    if not future_dates.empty:
-                        preds = make_predictions(model, future_dates)
-                        
-                        # Store predictions
-                        test_rows = test[
-                            (test['store_id'] == store_id) & 
-                            (test['item_id'] == item_id)
-                        ]
-                        pred_df = pd.DataFrame({
-                            'row_id': test_rows['row_id'],
-                            'quantity': preds
-                        })
-                        predictions.append(pred_df)
-                        print(f"Made {len(pred_df)} predictions for store {store_id}, item {item_id}")
-                    
+                    preds = make_predictions(model, future_dates)
+                
+                # Store predictions with proper row_ids
+                pred_df = pd.DataFrame({
+                    'row_id': test_group['row_id'].astype(str),  # Ensure row_ids are strings
+                    'quantity': preds.clip(lower=0)  # Ensure no negative predictions
+                })
+                predictions.append(pred_df)
+                print(f"Made {len(pred_df)} predictions for store {store_id}, item {item_id}")
+                
             except Exception as e:
-                print(f"Error processing group {i}: {str(e)}")
+                print(f"Error processing combination {i}: {str(e)}")
+                # Use monthly average as fallback on error
+                if not test_group.empty and len(monthly_avg) > 0:
+                    print(f"Using monthly average as fallback due to error")
+                    test_months = test_group['date'].dt.month
+                    preds = test_months.map(monthly_avg.to_dict()).fillna(monthly_avg.mean())
+                    pred_df = pd.DataFrame({
+                        'row_id': test_group['row_id'].astype(str),
+                        'quantity': preds.clip(lower=0)
+                    })
+                    predictions.append(pred_df)
                 continue
     
         return predictions
@@ -213,24 +246,49 @@ def main(sample_size=None):  # Use full dataset for final predictions
 if __name__ == '__main__':
     import sys
     try:
-        sample_size = int(sys.argv[1]) if len(sys.argv) > 1 else None
+        # Always use exactly 100 items
+        sample_size = 100
         print(f"\nRunning pipeline with sample_size={sample_size}")
         predictions = main(sample_size=sample_size)
         
         if predictions and len(predictions) > 0:
             # Combine all predictions
-            final_predictions = pd.concat(predictions)
+            final_predictions = pd.concat(predictions, ignore_index=True)
+            
+            # Ensure row_ids are strings and quantity is non-negative
+            final_predictions['row_id'] = final_predictions['row_id'].astype(str)
+            final_predictions['quantity'] = final_predictions['quantity'].clip(lower=0)
+            
+            # Sort by row_id
             final_predictions = final_predictions.sort_values('row_id')
             
+            # Fill any missing values with global mean
+            if final_predictions['quantity'].isna().any():
+                mean_quantity = final_predictions['quantity'].mean()
+                final_predictions['quantity'] = final_predictions['quantity'].fillna(mean_quantity)
+                print(f"\nFilled {final_predictions['quantity'].isna().sum()} missing values with mean: {mean_quantity:.2f}")
+            
             # Verify predictions
-            print(f"\nGenerated {len(final_predictions)} predictions")
-            print(f"Number of unique store-item combinations: {len(predictions)}")
-            print(f"Any missing values: {final_predictions['quantity'].isna().any()}")
+            print("\nPrediction Summary:")
+            print(f"Total predictions: {len(final_predictions)}")
+            print(f"Unique store-item combinations: {len(predictions)}")
+            print(f"Missing values: {final_predictions['quantity'].isna().sum()}")
+            print(f"Negative values: {(final_predictions['quantity'] < 0).sum()}")
+            print("\nSample of predictions:")
+            print(final_predictions.head().to_string())
             
             # Save predictions
             output_path = Path('~/data/ml-zoomcamp-2024/prophet_submission.csv').expanduser()
             final_predictions.to_csv(output_path, index=False)
             print(f"\nPredictions saved to {output_path}")
+            
+            # Verify file contents
+            saved_preds = pd.read_csv(output_path)
+            print("\nVerification of saved file:")
+            print(f"File shape: {saved_preds.shape}")
+            print(f"Columns: {', '.join(saved_preds.columns)}")
+            print(f"Sample of saved predictions:")
+            print(saved_preds.head().to_string())
         else:
             print("\nNo predictions generated!")
         
