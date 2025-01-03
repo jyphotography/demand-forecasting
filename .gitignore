@@ -1,2 +1,12 @@
 venv/
-data/
+data/actual_matrix.csv
+data/catalog.csv
+data/discounts_history.csv
+data/markdowns.csv
+data/ml-zoomcamp-2024-competition.zip
+data/stores.csv
+data/test.csv
+data/sample_submission.csv
+data/online.csv
+data/price_history.csv
+data/sales.csv
