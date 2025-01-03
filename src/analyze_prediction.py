@@ -9,6 +9,7 @@ def load_and_analyze_predictions():
     
     # Load predictions and sample submission
     predictions = pd.read_csv(data_dir / 'submission.csv')
+    # predictions = pd.read_csv(data_dir / 'prophet_submission.csv')
     test = pd.read_csv(data_dir / 'test.csv', sep=';')
     
     print("\nPredictions Analysis:")

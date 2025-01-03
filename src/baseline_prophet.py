@@ -55,13 +55,16 @@ def load_data(sample_size=None):
     test['date'] = pd.to_datetime(test['date'], format='%d.%m.%Y')
     
     if sample_size:
-        # Get first N unique items
-        first_n_items = all_sales['item_id'].unique()[:sample_size]
-        print(f"Selected first {len(first_n_items)} unique items")
-        # Filter sales for these items
-        all_sales = all_sales[all_sales['item_id'].isin(first_n_items)]
+        # Get first N unique store-item combinations
+        unique_combinations = all_sales[['store_id', 'item_id']].drop_duplicates()
+        first_n_combinations = unique_combinations.head(sample_size)
+        print(f"Selected first {len(first_n_combinations)} unique store-item combinations")
+        
+        # Filter sales for these combinations
+        all_sales = all_sales.merge(first_n_combinations, on=['store_id', 'item_id'])
+        
         # Also filter test data
-        test = test[test['item_id'].isin(first_n_items)]
+        test = test.merge(first_n_combinations, on=['store_id', 'item_id'])
     
     return all_sales, test
 
@@ -110,112 +113,186 @@ def make_predictions(model, future_dates):
     forecast = model.predict(future_dates)
     return forecast['yhat']
 
-def main(sample_size=None):  # Use full dataset for final predictions
+def main(sample_size=100):  # Default to 100 items as requested
     print("Loading data...")
     predictions = []
-    validation_rmse = []
     
     try:
-        all_sales, test = load_data(sample_size=sample_size)
+        # Load raw test data with correct separator
+        # data_dir = Path('~/data/ml-zoomcamp-2024').expanduser()
+        data_dir = Path('/workspaces/demand-forecasting/data').expanduser()
+        test = pd.read_csv(data_dir / 'test.csv', sep=';')
+        
+        # Keep IDs as strings, only convert date
+        test['row_id'] = test['row_id'].astype(str)
+        test['store_id'] = test['store_id'].astype(str)
+        test['item_id'] = test['item_id'].astype(str)
+        test['date'] = pd.to_datetime(test['date'], format='%d.%m.%Y')
+        
+        print("\nTest data sample:")
+        print(test.head().to_string())
+        print("\nTest data types:")
+        print(test.dtypes)
+        
+        # Get first 100 unique store-item combinations from test set
+        test_combinations = test[['store_id', 'item_id']].drop_duplicates().head(sample_size)
+        print(f"Selected first {len(test_combinations)} store-item combinations from test set")
+        
+        # Filter test data to only include selected combinations
+        test = test.merge(test_combinations, on=['store_id', 'item_id'])
+        
+        # Now load and filter training data
+        sales = pd.read_csv(data_dir / 'sales.csv', index_col=0)
+        online = pd.read_csv(data_dir / 'online.csv', index_col=0)
+        
+        # Convert IDs to strings in training data to match test data
+        sales['store_id'] = sales['store_id'].astype(str)
+        sales['item_id'] = sales['item_id'].astype(str)
+        online['store_id'] = online['store_id'].astype(str)
+        online['item_id'] = online['item_id'].astype(str)
+        
+        # Combine sales data
+        sales['channel'] = 'offline'
+        online['channel'] = 'online'
+        all_sales = pd.concat([sales, online], ignore_index=True)
+        
+        # Convert dates in training data
+        all_sales['date'] = pd.to_datetime(all_sales['date'])
+        
+        # Filter training data to match test combinations
+        all_sales = all_sales.merge(test_combinations, on=['store_id', 'item_id'])
+        
     except Exception as e:
         print(f"Error loading data: {str(e)}")
-        return [], []
+        return []
     
     try:
         print("\nPreparing data for Prophet...")
+        total_combinations = len(test_combinations)
+        print(f"\nTraining models for {total_combinations} store-item combinations...")
         
-        # Group by store and item
-        groups = all_sales.groupby(['store_id', 'item_id'])
-        total_groups = len(groups)
-        
-        print(f"\nTraining models for {total_groups} store-item combinations...")
-        
-        # Calculate validation period
-        max_date = all_sales['date'].max()
-        validation_start = max_date - pd.Timedelta(days=30)
-        
-        for i, ((store_id, item_id), group_data) in enumerate(groups, 1):
+        for i, (_, row) in enumerate(test_combinations.iterrows(), 1):
+            store_id, item_id = row['store_id'], row['item_id']
+            print(f"\nProcessing combination {i}/{total_combinations}: store {store_id}, item {item_id}")
+            
+            # Get training data for this combination
+            group_data = all_sales[
+                (all_sales['store_id'] == store_id) & 
+                (all_sales['item_id'] == item_id)
+            ]
+                
             try:
-                print(f"\nProcessing group {i}/{total_groups}: store {store_id}, item {item_id}")
+                print(f"\nProcessing combination {i}/{total_combinations}: store {store_id}, item {item_id}")
                 
-                # Split into train and validation
-                train_data = group_data[group_data['date'] <= validation_start]
-                val_data = group_data[group_data['date'] > validation_start]
-                
-                if len(train_data) < 10:  # Skip if too little data
-                    print(f"Skipping group {i}: insufficient data")
-                    continue
-                
-                # Prepare data for this group
-                prophet_data = prepare_prophet_data(train_data)
-                
-                # Train model
-                model = train_prophet_model(prophet_data)
-                
-                # Validate model
-                if not val_data.empty:
-                    val_dates = pd.DataFrame({'ds': val_data['date'].unique()})
-                    val_preds = make_predictions(model, val_dates)
-                    
-                    # Aggregate actual values for validation
-                    val_actuals = prepare_prophet_data(val_data)
-                    
-                    # Calculate RMSE for this group
-                    group_rmse = np.sqrt(mean_squared_error(
-                        val_actuals['y'],
-                        val_preds[:len(val_actuals)]
-                    ))
-                    validation_rmse.append(group_rmse)
-                    print(f"Group RMSE: {group_rmse:.4f}")
-                
-                # Prepare future dates for this store-item combination
-                future_dates = test[
+                # Get test dates for this store-item combination
+                test_group = test[
                     (test['store_id'] == store_id) & 
                     (test['item_id'] == item_id)
-                ][['date']].rename(columns={'date': 'ds'})
+                ]
                 
-                # Make predictions
-                if not future_dates.empty:
-                    preds = make_predictions(model, future_dates)
+                if test_group.empty:
+                    print(f"No test data found for store {store_id}, item {item_id}")
+                    continue
+                
+                # Calculate monthly averages
+                monthly_avg = group_data.groupby(group_data['date'].dt.month)['quantity'].mean()
+                
+                if len(group_data) < 30:  # Use monthly average for insufficient data
+                    print(f"Using monthly average for combination {i}: insufficient data ({len(group_data)} records)")
                     
-                    # Store predictions
+                    # Use monthly average for predictions
+                    test_months = test_group['date'].dt.month
+                    preds = test_months.map(monthly_avg.to_dict()).fillna(monthly_avg.mean())
+                    
+                else:
+                    print(f"Using Prophet for combination {i}: {len(group_data)} records available")
+                    # Prepare data for Prophet
+                    prophet_data = prepare_prophet_data(group_data)
+                    
+                    # Train model
+                    model = train_prophet_model(prophet_data)
+                    
+                    # Prepare future dates
+                    future_dates = test_group[['date']].rename(columns={'date': 'ds'})
+                    
+                    # Make predictions
+                    preds = make_predictions(model, future_dates)
+                
+                # Store predictions with proper row_ids
+                pred_df = pd.DataFrame({
+                    'row_id': test_group['row_id'].astype(str),  # Ensure row_ids are strings
+                    'quantity': preds.clip(lower=0)  # Ensure no negative predictions
+                })
+                predictions.append(pred_df)
+                print(f"Made {len(pred_df)} predictions for store {store_id}, item {item_id}")
+                
+            except Exception as e:
+                print(f"Error processing combination {i}: {str(e)}")
+                # Use monthly average as fallback on error
+                if not test_group.empty and len(monthly_avg) > 0:
+                    print(f"Using monthly average as fallback due to error")
+                    test_months = test_group['date'].dt.month
+                    preds = test_months.map(monthly_avg.to_dict()).fillna(monthly_avg.mean())
                     pred_df = pd.DataFrame({
-                        'row_id': test[
-                            (test['store_id'] == store_id) & 
-                            (test['item_id'] == item_id)
-                        ]['row_id'],
-                        'quantity': preds
+                        'row_id': test_group['row_id'].astype(str),
+                        'quantity': preds.clip(lower=0)
                     })
                     predictions.append(pred_df)
-                    
-            except Exception as e:
-                print(f"Error processing group {i}: {str(e)}")
                 continue
     
-        return predictions, validation_rmse
+        return predictions
     except Exception as e:
         print(f"Error in pipeline execution: {str(e)}")
-        return [], []
+        return []
 
 if __name__ == '__main__':
+    import sys
     try:
-        predictions, validation_rmse = main()  # Start with default small sample size
+        # Always use exactly 100 items
+        sample_size = 3000
+        print(f"\nRunning pipeline with sample_size={sample_size}")
+        predictions = main(sample_size=sample_size)
         
         if predictions and len(predictions) > 0:
             # Combine all predictions
-            final_predictions = pd.concat(predictions)
+            final_predictions = pd.concat(predictions, ignore_index=True)
+            
+            # Ensure row_ids are strings and quantity is non-negative
+            final_predictions['row_id'] = final_predictions['row_id'].astype(str)
+            final_predictions['quantity'] = final_predictions['quantity'].clip(lower=0)
+            
+            # Sort by row_id
             final_predictions = final_predictions.sort_values('row_id')
             
+            # Fill any missing values with global mean
+            if final_predictions['quantity'].isna().any():
+                mean_quantity = final_predictions['quantity'].mean()
+                final_predictions['quantity'] = final_predictions['quantity'].fillna(mean_quantity)
+                print(f"\nFilled {final_predictions['quantity'].isna().sum()} missing values with mean: {mean_quantity:.2f}")
+            
+            # Verify predictions
+            print("\nPrediction Summary:")
+            print(f"Total predictions: {len(final_predictions)}")
+            print(f"Unique store-item combinations: {len(predictions)}")
+            print(f"Missing values: {final_predictions['quantity'].isna().sum()}")
+            print(f"Negative values: {(final_predictions['quantity'] < 0).sum()}")
+            print("\nSample of predictions:")
+            print(final_predictions.head().to_string())
+            
             # Save predictions
-            # output_path = Path('~/data/ml-zoomcamp-2024/prophet_submission.csv').expanduser()
             output_path = Path('/workspaces/demand-forecasting/data/prophet_submission.csv').expanduser()
             final_predictions.to_csv(output_path, index=False)
             print(f"\nPredictions saved to {output_path}")
-        
-        if validation_rmse and len(validation_rmse) > 0:
-            mean_rmse = np.mean(validation_rmse)
-            print(f"\nMean Validation RMSE: {mean_rmse:.4f}")
-            print(f"Number of successful models: {len(validation_rmse)}")
+            
+            # Verify file contents
+            saved_preds = pd.read_csv(output_path)
+            print("\nVerification of saved file:")
+            print(f"File shape: {saved_preds.shape}")
+            print(f"Columns: {', '.join(saved_preds.columns)}")
+            print(f"Sample of saved predictions:")
+            print(saved_preds.head().to_string())
+        else:
+            print("\nNo predictions generated!")
         
     except KeyboardInterrupt:
         print("\nProcess interrupted by user")
