@@ -171,3 +171,11 @@ zipp==3.21.0
 kaggle
 seaborn
 lightgbm
+matplotlib
+jupyter
+pandas
+numpy
+seaborn
+matplotlib
+scikit-learn
+flask
