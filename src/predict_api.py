@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-def load_model(model_path='../models'):
+def load_model(model_path='./models'):
     """Load saved model and vectorizer"""
     try:
         with open(Path(model_path) / 'random_forest_model.bin', 'rb') as f_model:
