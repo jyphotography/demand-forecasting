@@ -9,3 +9,5 @@ data/online.csv
 data/price_history.csv
 data/sales.csv
 data/submission.csv
+data/submission
+.ipynb_checkpoints/
