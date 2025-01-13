@@ -80,11 +80,28 @@ kaggle competitions download -c ml-zoomcamp-2024-competition -p data/
 cd data && unzip ml-zoomcamp-2024-competition.zip && cd ..
 ```
 
-### Submission
+## Model Training
 ```bash
-kaggle competitions submit -c ml-zoomcamp-2024-competition -f submission.csv -m ""
+python src/training.py
+``` 
+
+## Model Prediction
+```bash
+python src/predict.py
+``` 
+
+## KaggleSubmission
+```bash
+
+kaggle competitions submit -c ml-zoomcamp-2024-competition -f submissions/rf_predictions.csv -m "automated predict test"
 ```
 
+## Model Deployment
+```bash
+python src/predict_api.py
+python src/test_api.py
+```
+![API response](image.png)
 
 ## Project Structure
 - `data/`: Competition dataset
